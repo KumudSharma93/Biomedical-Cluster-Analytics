@@ -1,0 +1,994 @@
+---
+title: "Dissertation_Analysis"
+author: "Analysis of ARDS data set"
+number-sections: true
+format: 
+  html:
+    embed-resources: true
+    code-tools: true
+  pdf:
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: console
+execute:
+  echo: false
+  eval: true
+  warning: false
+  message: false
+---
+
+```{r}
+#| lable: 
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(VIM)
+library(corrplot)
+library(GGally)
+library(gridExtra)
+install.packages("factoextra")
+library(factoextra)
+library(cluster)
+install.packages("dendextend")
+library(dendextend)
+```
+
+# Introduction {#sec-Intro}
+
+```{r}
+# Import the data sets
+data <- read_excel("ARDSdata.xlsx")
+View(data)
+```
+
+# Data Wrangling Methods {#sec-DW}
+
+```{r}
+colnames_data <- colnames(data)
+ARDSdata <- data %>% 
+  select(-starts_with("PreECMO")) # 29 Biomedical Markers #
+```
+
+```{r}
+glimpse(ARDSdata) # Gender, ECMO_survival, Hospital_Survival are of type character
+
+# Since gender is of type character, we convert it to factor
+ARDSdata$Gender <- as.factor(ARDSdata$Gender)
+ARDSdata$ECMO_Survival <- as.factor(ARDSdata$ECMO_Survival)
+ARDSdata$Hospital_Survival <- as.factor(ARDSdata$Hospital_Survival)
+
+glimpse(ARDSdata) #converted
+```
+
+
+```{r}
+# Missing Values#
+sum(is.na(ARDSdata)) # 726 Missing Values
+```
+
+#Boxplots#
+```{r}
+# Boxplots - Grouped by both Gender and Indication
+continuous_vars <- c("Age", "Duration_ECMO", "Day1ECMO_RR", "Day1ECMO_Vt",
+                     "Day1ECMO_FiO2", "Day1ECMO_Ppeak", "Day1ECMO_Pmean",
+                     "Day1ECMO_PEEP", "Day1ECMO_PF", "Day1ECMO_SpO2", "Day1ECMO_PaCO2",
+                     "Day1ECMO_pH", "Day1ECMO_BE", "Day1ECMO_Lactate","Day1ECMO_NAdose",
+                     "Day1ECMO_MAP", "Day1ECMO_Creatinine", "Day1ECMO_Urea",
+                     "Day1ECMO_CK", "Day1ECMO_Bilirubin", "Day1ECMO_Albumin",
+                     "Day1ECMO_CRP","Day1ECMO_Fibrinogen", "Day1ECMO_Ddimer", 
+                     "Day1ECMO_ATIII", "Day1ECMO_Leukocytes", "Day1ECMO_Platelets",
+                     "Day1ECMO_TNFa", "Day1ECMO_IL6", "Day1ECMO_IL8", "Day1ECMO_siIL2")
+boxplot_continuous_grouped <- function(column_name) {
+  ggplot(ARDSdata, aes(x = factor(Indication), y = .data[[column_name]], fill = Gender)) +
+    geom_boxplot(position = "dodge") +
+    labs(x = "Indication", y = column_name, fill = "Gender",
+         title = paste("Box Plot of", column_name, "by Gender and Indication")) +
+    theme_minimal()
+}
+# Use lapply to create a list of grouped box plots
+grouped_boxplots <- lapply(continuous_vars, boxplot_continuous_grouped)
+for (plot in grouped_boxplots) {
+  print(plot)
+}
+do.call(grid.arrange, c(grouped_boxplots[1:10], ncol = 3))
+do.call(grid.arrange, c(grouped_boxplots[11:20], ncol = 3))
+do.call(grid.arrange, c(grouped_boxplots[21:31], ncol = 3))
+```
+
+
+```{r}
+# Summary statistics for the entire dataset
+summary(ARDSdata) #
+# Identifiers :Pt_Id, Gender, Indication have no missing values# 
+# Outcome Variable : ECMO_Survival, Hospital_Survival  have no missing values#
+# Age has no Missing Values
+# Duration_ECMO has 1 missing value
+ARDSdata[which(is.na(ARDSdata$Duration_ECMO)), ] # 449th row
+# It can be observed by visual inspection that 449th row has no more missing values except Duration_ECMO #
+
+# Counting the Missing Values in each row #
+missing_values_count <- apply(ARDSdata, 1, function(row) sum(is.na(row)))
+missing_values_count #Additionally, confirms 449th row has only 1 missing value
+unique(missing_values_count) # 0  1  2  4 29 18  5 19  3  6  7 14
+
+ARDSdata_with_missing_count <- cbind(ARDSdata, MissingValuesCount = missing_values_count)
+ARDSdata_with_missing_count
+
+# Find rows with 10 or more missing values
+rows_with_10_or_more_missing <- which(missing_values_count >= 10)
+rows_with_10_or_more_missing # 21  26  27  94 101 106 115 125 132 151 341 350
+rows_with_20_or_more_missing <- which(missing_values_count >= 20)
+rows_with_20_or_more_missing # 21  94 106 115 125 132 350 (total 7 rows)
+rows_with_25_or_more_missing <- which(missing_values_count >= 25)
+rows_with_25_or_more_missing # 21  94 106 115 125 132 350
+
+rows_with_10_or_more_missing_data <-
+  ARDSdata_with_missing_count[rows_with_10_or_more_missing, ]
+rows_with_10_or_more_missing_data # 12 rows with large number of missing values
+unique(rows_with_10_or_more_missing_data$MissingValuesCount) # 29, 18, 19, 14
+which(missing_values_count == 29)
+# The rows with 29 missing values = 21, 94, 106, 115, 125, 132, 350 (7 rows)
+which(missing_values_count == 19)
+# The rows with 19 missing values = 101 (1 row)
+which(missing_values_count == 18)
+# The rows with 18 missing values = 26, 27, 151 (3 row) 
+which(missing_values_count == 14)
+# The rows with 14 missing values = 341 (1 row)
+
+# There are in total 29 biomedical markers. Since a large number of these markers are missing, these rows will be deleted
+# Another thing to be noted, rows 106 and 115 survived (both ECMO_survival and Hospital_Survival) but have 29 missing enteries
+```
+
+
+```{r}
+# EXCLUSION of rows with missing values
+# Delete the rows
+rows_to_delete <- c(21, 26, 27, 94, 101, 106, 115, 125, 132, 151, 341, 350)
+ARDSdata_new <- ARDSdata[-rows_to_delete, ]# 438 rows
+dim(ARDSdata_new) # 438 rows by 36 columns
+```
+
+
+```{r}
+# Exploration of ARDSdata_new
+sum(is.na(ARDSdata_new)) # Check number of missing values, 436 values
+summary(ARDSdata_new)    # Summary of dataset
+colSums(is.na(ARDSdata_new))  # Number of missing values per column
+
+# Columns with missing values
+columns_with_missing_values <- colnames(ARDSdata_new)[colSums(is.na(ARDSdata_new)) > 0] 
+columns_with_missing_values
+
+# Function to calculate median for a column by Gender and Indication
+calculate_median <- function(column_name, data) {
+  result <- data %>%
+    group_by(Gender, Indication) %>%
+    summarize(median_val = median(.data[[column_name]], na.rm = TRUE))
+  
+  return(result)
+}
+
+
+# Apply function to each column in columns_with_missing_values
+median_results <- lapply(columns_with_missing_values, calculate_median, 
+                         data = ARDSdata_new)
+names(median_results) <- columns_with_missing_values
+
+# Function to replace missing values with the calculated median
+replace_missing_with_median <- function(column_name, data, medians) {
+  for (i in 1:nrow(medians)) {
+    gender <- medians$Gender[i]
+    indication <- medians$Indication[i]
+    median_value <- medians$median_val[i]
+    data[[column_name]][data$Gender == gender & data$Indication == indication & is.na(data[[column_name]])] <- median_value
+  }
+  return(data)
+}
+
+# Create ARDSdata_final by copying ARDSdata_new
+ARDSdata_final <- ARDSdata_new
+
+# Replace missing values in ARDSdata_final with the calculated medians
+for (column in columns_with_missing_values) {
+  ARDSdata_final <- replace_missing_with_median(column, ARDSdata_final, median_results[[column]])
+}
+
+ARDSdata_final
+
+# Impute NA values of ALbumin (women and Indication = 40 by Overall Median)
+overall_median_Albumin <- median(ARDSdata_final$Day1ECMO_Albumin, na.rm = TRUE)
+ARDSdata_final$Day1ECMO_Albumin[ARDSdata_final$Gender == "w" & ARDSdata_final$Indication == 4 & is.na(ARDSdata_final$Day1ECMO_Albumin)] <- overall_median_Albumin
+summary(ARDSdata_final)
+sum(is.na(ARDSdata_final))
+```
+
+
+# Exploratory Data Analysis {#sec-EDA}
+
+```{r}
+#### VISUALISATIONS ###
+# Barplots of Categorical Variables
+categorical_vars <- c("Gender", "Indication", "ECMO_Survival",
+                      "Hospital_Survival")
+barplot_cat <- function(column_name_cat) {
+  ggplot(data = ARDSdata_final, mapping = aes_string(x = column_name_cat)) +
+    geom_bar(fill = "maroon", alpha = 0.7) +
+    labs(x = column_name_cat, y = "Count", title = paste("Bar Plot of", column_name_cat)) +
+    theme_minimal()
+}
+ARDSdata$Indication <- factor(ARDSdata$Indication, levels = unique(ARDSdata$Indication))
+barplots <- lapply(categorical_vars, barplot_cat)
+for(barp in barplots){
+  print(barp)
+}
+do.call("grid.arrange", c(barplots, ncol = 2))
+```
+
+Histograms of Data with imputation by median 
+```{r}
+# Function to create a histogram for a given column
+histogram_continuous <- function(column_name) {
+  ggplot(data = ARDSdata_final, mapping = aes_string(x = column_name)) +
+    geom_histogram(color = "white", fill = "skyblue") +
+    theme_minimal()
+}
+
+# Use lapply to create a list of histograms
+histograms <- lapply(continuous_vars, histogram_continuous)
+
+# Print each histogram
+for (hist in histograms) {
+  print(hist)
+}
+do.call(grid.arrange, c(histograms[1:15], ncol = 3))
+do.call(grid.arrange, c(histograms[16:31], ncol = 3))
+```
+
+
+```{r}
+# Function to create a histogram for a given column
+histogram_continuous_og <- function(column_name) {
+  ggplot(data = ARDSdata, mapping = aes_string(x = column_name)) +
+    geom_histogram(color = "white", fill = "red") +
+    theme_minimal()
+}
+
+# Use lapply to create a list of histograms
+histograms_og <- lapply(continuous_vars, histogram_continuous_og)
+
+# Print each histogram
+for (hist in histograms) {
+  print(hist)
+}
+do.call(grid.arrange, c(histograms_og[1:15], ncol = 3))
+do.call(grid.arrange, c(histograms_og[16:31], ncol = 3))
+```
+
+
+#BioMedical Markers#
+```{r}
+# BioMedical Dataset#
+biomedical_data <- ARDSdata_final %>%
+  select(8:ncol(.))
+colnames(biomedical_data) <- sub("^Day1ECMO_", "", colnames(biomedical_data))
+dim(biomedical_data) # 438 by 29
+summary(biomedical_data)
+```
+
+
+```{r}
+continuous_vars_biomedical <- c("RR", "Vt", "FiO2", "Ppeak",
+                    "Pmean", "PEEP", "PF", "SpO2", "PaCO2", "pH", "BE", 
+                    "Lactate", "NAdose", "MAP", "Creatinine", "Urea", "CK",
+                    "Bilirubin", "Albumin", "CRP", "Fibrinogen", "Ddimer",
+                    "ATIII", "Leukocytes", "Platelets", "TNFa", "IL6", "IL8",
+                    "siIL2")
+
+# Function to create a histogram for a given column
+histogram_continuous_biomedical <- function(column_name) {
+  ggplot(data = biomedical_data, mapping = aes_string(x = column_name)) +
+    geom_histogram(color = "white", fill = "orange") +
+    theme_minimal()
+}
+
+# Use lapply to create a list of histograms
+histograms_biomedical <- lapply(continuous_vars_biomedical,
+                                histogram_continuous_biomedical)
+
+# Print each histogram
+for (hist in histograms_biomedical) {
+  print(hist)
+}
+do.call(grid.arrange, c(histograms_biomedical[1:15], ncol = 3))
+do.call(grid.arrange, c(histograms_biomedical[16:29], ncol = 3))
+```
+
+Find and Plot Outliers
+```{r}
+# Function to find and plot outliers for a given column
+outliers <- function(data, column_name) {
+  outliers <- data %>%
+    mutate(is_outlier = get(column_name) > quantile(get(column_name), 0.75) +
+             1.5 * IQR(get(column_name)) | get(column_name) <
+             quantile(get(column_name), 0.25) - 1.5 * IQR(get(column_name))) %>%
+    filter(is_outlier) %>%
+    arrange(get(column_name))
+  
+  print(outliers)
+  
+  ggplot(data, aes_string(y = column_name)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", column_name), y = column_name) +
+    theme_minimal()
+}
+
+# Loop through each continuous variable, find outliers and plot
+for (column in continuous_vars_biomedical) {
+  plot <- outliers(biomedical_data, column)
+  print(plot)
+}
+# RR = 13 outliers
+# Vt = 11
+# FiO2 = 19
+# Ppeak = 4
+# Pmean = 9
+# PEEP = 5
+# PF = 17
+# SpO2 = 8
+# PaCO2 = 17
+# pH = 13
+# BE = 11
+# Lactate = 56
+# NAdose = 35
+# MAP = 2
+# Creatinine = 18
+# Urea = 31
+# CK = 60
+# Bilirubin = 43
+# Albumin = 17
+# CRP = 2
+# Fibrinogen = 9
+# Ddimer = 39
+# ATIII = 5
+# Leukocytes = 14
+# Platelets = 11
+# TNFa = 33
+# IL6 = 73
+# IL8 = 68
+# siIL2 = 41
+```
+
+Log transformation
+
+```{r}
+columns_to_log_transform <- c("Lactate", "CK", "TNFa", "IL6", "IL8", "siIL2")
+
+# Log transform the specified columns
+
+biomedical_data <- biomedical_data %>%
+  mutate(log_Lactate = log(Lactate),
+         log_CK = log(CK),
+         log_TNFa = log(TNFa),
+         log_IL6 = log(IL6),
+         log_IL8 = log(IL8),
+         log_siIL2 = log(siIL2)) %>%
+  select(-Lactate, -CK, -TNFa, -IL6, -IL8, -siIL2)
+
+log_outliers <- function(data, column_name) {
+  outliers <- data %>%
+    mutate(is_outlier = get(column_name) > quantile(get(column_name), 0.75) +
+             1.5 * IQR(get(column_name)) | get(column_name) <
+             quantile(get(column_name), 0.25) - 1.5 * IQR(get(column_name))) %>%
+    filter(is_outlier) %>%
+    arrange(get(column_name))
+  
+  print(outliers)
+  
+  plot <- ggplot(data, aes_string(y = column_name)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", column_name), y = column_name) +
+    theme_minimal()
+  
+  return(plot)
+}
+
+# Loop through each log-transformed column, find outliers and plot
+for (column in columns_to_log_transform) {
+  log_column <- paste0("log_", column)
+  plot <- log_outliers(biomedical_data, log_column)
+  print(plot)
+}
+# log_lactate = 17
+# log_CK = 5
+# log_TNFA = 8
+# log_IL6 = 16
+# log_IL8 = 26
+# log_siIL2 = 13
+```
+
+```{r}
+biomedical_data_without_capped_ouliers <- biomedical_data
+biomedical_data_with_capped_ouliers <- biomedical_data
+```
+
+Capping Outliers
+```{r}
+# Capping Outliers #
+# Function to cap outliers in a column
+cap_outliers <- function(data, column) {
+  percentiles <- data %>%
+    summarise(q05 = quantile(!!sym(column), 0.05, na.rm = TRUE),
+              q95 = quantile(!!sym(column), 0.95, na.rm = TRUE))
+  data %>%
+    mutate(!!sym(column) := ifelse(!!sym(column) < percentiles$q05,
+                                   percentiles$q05, 
+                                   ifelse(!!sym(column) > percentiles$q95,                                                      percentiles$q95,!!sym(column))))
+}
+
+# List of columns to cap outliers for
+columns_to_cap <- c("RR", "Vt", "FiO2", "Ppeak", "Pmean", "PEEP", "PF", "SpO2",
+                    "PaCO2", "pH", "BE", "NAdose", "MAP",
+                    "Creatinine", "Urea", "Bilirubin", "Albumin", 
+                    "CRP", "Fibrinogen", "Ddimer", "ATIII", "Leukocytes",
+                    "Platelets", "log_Lactate", "log_CK", "log_TNFa", 
+                    "log_IL6", "log_IL8", "log_siIL2")
+
+# Apply the capping function to each column
+for (col in columns_to_cap) {
+  biomedical_data_with_capped_ouliers <- cap_outliers(biomedical_data_with_capped_ouliers, col)
+}
+```
+
+```{r}
+outliers_per_pt <- data.frame(Pt_ID = unique_pt_ids, stringsAsFactors = FALSE)
+
+# Loop through each variable of interest
+for (col in columns_of_interest) {
+  # Create a string representing the is_outlier condition
+  is_outlier_condition <- paste0(col, " > quantile(", col, ", 0.75) + 1.5 * IQR(", col, ") | ", col, " < quantile(", col, ", 0.25) - 1.5 * IQR(", col, ")")
+  
+  # Loop through each unique Pt_ID and find outliers for the current variable
+  outliers_per_col <- sapply(unique_pt_ids, function(pt_id) {
+    outliers <- outlier_results_df[outlier_results_df$Pt_ID == pt_id, col]
+    if (length(outliers) > 0) {
+      paste(unique(outliers), collapse = ", ")
+    } else {
+      NA
+    }
+  })
+  
+  # Add outliers for the current variable to the dataframe
+  outliers_per_pt[[col]] <- outliers_per_col
+}
+
+# Print or use outliers_per_pt dataframe
+outliers_per_pt
+```
+
+
+
+
+```{r}
+outliers <- function(data, column_name) {
+  outliers <- data %>%
+    mutate(is_outlier = get(column_name) > quantile(get(column_name), 0.75) +
+             1.5 * IQR(get(column_name)) | get(column_name) <
+             quantile(get(column_name), 0.25) - 1.5 * IQR(get(column_name))) %>%
+    filter(is_outlier) %>%
+    arrange(get(column_name))
+  
+  print(outliers)
+  
+  ggplot(data, aes_string(y = column_name)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", column_name), y = column_name) +
+    theme_minimal()
+}
+
+# Loop through each continuous variable, find outliers and plot
+for (column in columns_to_cap) {
+  plot <- outliers(biomedical_data_with_capped_ouliers, column)
+  print(plot)
+}
+# RR = from 13 outliers to 0
+# Vt = 11 to 0
+# FiO2 = 19 to 0
+# Ppeak = 4 to 0
+# Pmean = 9 to 0
+# PEEP = 5 to 0
+# PF = 17 to 0
+# SpO2 = 8 to 0
+# PaCO2 = 17 to 0
+# pH = 13 to 0
+# BE = 11 to 0
+# NAdose = 35 to 35
+# MAP = 2 to 0
+# Creatinine = 18 to 0
+# Urea = 31 to 31
+# Bilirubin = 43 to 43
+# Albumin = 17 to 0
+# CRP = 2 to 0
+# Fibrinogen = 9 to 0
+# Ddimer = 39 to 39
+# ATIII = 5 to 0
+# Leukocytes = 14 to 0
+# Platelets = 11 to 0
+# log_Lactae = 56 to 17 to 0
+# log_CK = 60 to 5 to 0
+# log_TNFa = 33 to 8 to 0
+# log_IL6 = 73 to 16 to 0
+# log_IL8 = 68 to 26 to 26
+# log_siIL2 = 41 to 13 to 0
+```
+
+
+
+```{r}
+summary(biomedical_data)
+```
+
+# PCA #
+```{r}
+# Correlation Matrix #
+M_capped <- cor(biomedical_data_with_capped_ouliers)
+corrplot(M_capped, method = "number", type= "upper", tl.col = "black", 
+         tl.srt = 45,tl.cex = 0.5, number.cex = 0.6)
+round(diag(var(biomedical_data_with_capped_ouliers)), 2) #Huge differences in variances of difference variables , hence use correlation matrix
+```
+
+```{r}
+pca_result_capped <- princomp(biomedical_data_with_capped_ouliers, cor=T)
+summary(pca_result_capped)
+
+# Propotion of Variance = 90% of the original variability is explained by 17 components
+#Catell's Method
+plot(pca_result_capped)
+
+#Kaiser's Method
+sd.pca_capped <- pca_result_capped$sdev #component standard deviations
+
+ave.var_capped <- mean((sd.pca_capped^2)) # Find average variance
+ave.var_capped
+
+sd.pca_capped^2>ave.var_capped #find which components have higher than average variance (TRUE)
+# Based on the result, retain first 10 components
+```
+
+```{r}
+#Loadings#
+# loadings for the first 10 principal components
+loadings_capped <- pca_result_capped$rotation[, 1:10]
+loadings_capped
+```
+
+#PCA for biomedical markers without capping #
+```{r}
+pca_result_uc <- princomp(biomedical_data_without_capped_ouliers, cor=T)
+summary(pca_result_uc)
+
+# Propotion of Variance = 90% of the original variability is explained by 18 components
+
+#Catell's Method
+plot(pca_result_uc)
+
+#Kaiser's Method
+sd.pca_uc <- pca_result_uc$sdev #component standard deviations
+
+ave.var_uc <- mean((sd.pca_uc^2)) # Find average variance
+ave.var_uc
+
+sd.pca_uc^2>ave.var_uc #find which components have higher than average variance (TRUE)
+# Based on the result, retain first 10 components
+```
+
+Loadings
+```{r}
+# loadings for the first 10 principal components
+loadings_uc <- pca_result_uc$rotation[, 1:10]
+loadings_uc
+```
+
+# PCA without log transformation and without capping and hence mall outliers included #
+```{r}
+pca_result <- princomp(ARDSdata_final[,8:36], cor = T)
+summary(pca_result)
+
+# Propotion of Variance = 90% of the original variability is explained by 18 components
+
+#Catell's Method
+plot(pca_result)
+
+#Kaiser's Method
+sd.pca <- pca_result$sdev #component standard deviations
+
+ave.var <- mean((sd.pca^2)) # Find average variance
+ave.var
+
+sd.pca^2>ave.var #find which components have higher than average variance (TRUE)
+# Based on the result, retain first 11 components
+```
+
+
+```{r}
+# Compare biplots 
+biplot(pca_result_capped) # visualize both the direction and magnitude of variable contributions to principal components.
+biplot(pca_result_capped, , choices = c(1, 2), scale = 0) # focus more on the relationships (correlations) between variables and principal components, without emphasizing the variance explained by each variable.
+
+biplot(pca_result_uc)
+biplot(pca_result_uc, choices = c(1, 2), scale = 0)
+
+biplot(pca_result)
+
+
+#Screeplots#
+screeplot(pca_result_capped, type = "lines", main = "Scree Plot with Capped Outliers")
+
+screeplot(pca_result_uc, type = "lines", main = "Scree Plot without Capped Outliers")
+
+screeplot(pca_result, type = "lines", main = "Scree Plot without log transformation & Capped Outliers")
+```
+
+#CLUSTERING# 
+
+#k-means Clustering#
+Going ahead with Biomedical Data with capped outliers
+```{r}
+#Preparing a new dataset#
+df <- ARDSdata_final
+
+colnames(df) <- sub("^Day1ECMO_", "", colnames(df))
+df <- df %>%
+  mutate(log_Lactate = log(Lactate),
+         log_CK = log(CK),
+         log_TNFa = log(TNFa),
+         log_IL6 = log(IL6),
+         log_IL8 = log(IL8),
+         log_siIL2 = log(siIL2)) %>%
+  select(-Lactate, -CK, -TNFa, -IL6, -IL8, -siIL2)
+
+# Capping Outliers #
+# Function to cap outliers in a column
+cap_outliers <- function(data, column) {
+  percentiles <- data %>%
+    summarise(q05 = quantile(!!sym(column), 0.05, na.rm = TRUE),
+              q95 = quantile(!!sym(column), 0.95, na.rm = TRUE))
+  data %>%
+    mutate(!!sym(column) := ifelse(!!sym(column) < percentiles$q05,
+                                   percentiles$q05, 
+                                   ifelse(!!sym(column) > percentiles$q95,                                                      percentiles$q95,!!sym(column))))
+}
+
+# List of columns to cap outliers for
+columns_to_cap <- c("RR", "Vt", "FiO2", "Ppeak", "Pmean", "PEEP", "PF", "SpO2",
+                    "PaCO2", "pH", "BE", "NAdose", "MAP",
+                    "Creatinine", "Urea", "Bilirubin", "Albumin", 
+                    "CRP", "Fibrinogen", "Ddimer", "ATIII", "Leukocytes",
+                    "Platelets", "log_Lactate", "log_CK", "log_TNFa", 
+                    "log_IL6", "log_IL8", "log_siIL2")
+
+# Apply the capping function to each column
+for (col in columns_to_cap) {
+  df <- cap_outliers(df, col)
+}
+summary(df)
+```
+
+Scale the dataset
+```{r}
+df_scaled <- scale(df[,8:36])
+```
+
+#Elbow Method#
+```{r}
+fviz_nbclust(df_scaled, kmeans, method = "wss") +  
+  labs(subtitle = "Elbow method")
+
+# 5 clusters seem optimum
+```
+
+```{r}
+# Apply K-Means Clustering with the optimal number of clusters
+set.seed(1234)  # For reproducibility
+optimal_clusters <- 2
+kmeans_basic <- kmeans(df_scaled, centers = optimal_clusters, nstart = 25)
+kmeans_basic
+kmeans_basic_table <- data.frame(kmeans_basic$size, kmeans_basic$centers)
+kmeans_basic_df <- data.frame(Cluster = kmeans_basic$cluster, df_scaled)
+
+kmeans_basic # (between_SS / total_SS =  14.3 %)
+#Plot the clusters
+fviz_cluster(kmeans_basic, data=df_scaled, geom=c("point"), ellipse.type = "euclid")
+```
+
+#Silhouette Statistic#
+```{r}
+fviz_nbclust(df_scaled, kmeans, method = "silhouette")
+
+cluster.labels.2 <- kmeans_basic$cluster
+si2 <- silhouette(cluster.labels.2, dist(df_scaled))
+summary(si2)
+plot(si2)
+```
+
+```{r}
+install.packages("purrr")
+library(purrr)
+set.seed(1234)
+
+# function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(df_scaled, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 1 to k = 15
+k.values <- 1:25
+
+# extract wss for 2-15 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+       type="b", pch = 19, frame = FALSE, 
+       xlab="Number of clusters K",
+       ylab="Total within-clusters sum of squares")
+```
+
+```{r}
+# function to compute average silhouette for k clusters
+avg_sil <- function(k) {
+  km.res <- kmeans(df_scaled, centers = k, nstart = 25)
+  ss <- silhouette(km.res$cluster, dist(df))
+  mean(ss[, 3])
+}
+
+# Compute and plot wss for k = 2 to k = 15
+k.values_sil <- 2:25
+
+# extract avg silhouette for 2-15 clusters
+avg_sil_values <- map_dbl(k.values_sil, avg_sil)
+
+plot(k.values_sil, avg_sil_values,
+       type = "b", pch = 19, frame = FALSE, 
+       xlab = "Number of clusters K",
+       ylab = "Average Silhouettes")
+```
+
+
+```{r}
+# compute gap statistic
+set.seed(1234)
+gap_stat <- clusGap(df_scaled, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+# Print the result
+print(gap_stat, method = "firstmax")
+
+#Number of clusters (method 'firstmax'): 6
+```
+
+```{r}
+fviz_gap_stat(gap_stat) # 5 
+```
+
+```{r}
+set.seed(1234)
+
+# Trying with k = 3, 4, 5, 6 to see which gives better results
+for (k in 3:6) {
+  kmeans_result <- kmeans(df_scaled, centers = k, nstart = 100)
+  cat("Number of clusters:", k, "\n")
+  cat("Within cluster sum of squares by cluster:", kmeans_result$withinss, "\n")
+  cat("Total within cluster sum of squares:", kmeans_result$tot.withinss, "\n")
+  cat("Between_SS / Total_SS =", (kmeans_result$betweenss / kmeans_result$totss) * 100, "%\n\n")
+}
+
+```
+
+```{r}
+set.seed(1234)
+wss_values <- numeric(25)  # Initialize vector to store within sum of squares (WSS)
+
+# Loop through each value of k from 1 to 25
+for (i in 1:25) {
+  kmeans_model <- kmeans(df_scaled, centers = i, nstart = 100)
+  wss_values[i] <- kmeans_model$tot.withinss
+}
+
+# Create elbow plot
+elbow_plot <- plot(1:25, wss_values, type = "b", pch = 19, frame = FALSE,
+                   xlab = "Number of clusters (k)", ylab = "Within cluster sum of squares (WSS)",
+                   main = "Elbow Method to Determine Optimal k")
+```
+
+
+```{r}
+#Comparing Distance Metrics#
+evaluate_clustering <- function(data, centers, metric, method_name) {
+  pam_result <- pam(data, k = centers, metric = metric)
+  cat("Evaluation for", method_name, "distance:\n")
+  
+  # Compute silhouette score
+  sil <- silhouette(pam_result$clustering, dist(data, method = metric))
+  mean_sil <- mean(sil[, 3])
+  cat("Mean Silhouette Score:", mean_sil, "\n")
+  
+  # Visualize clustering
+  fviz_cluster(pam_result, geom = "point", ellipse.type = "euclid") + 
+    labs(subtitle = paste("PAM Clustering with", method_name, "Distance"))
+}
+
+```
+
+```{r}
+set.seed(1234)
+evaluation_euclidean <- evaluate_clustering(df_scaled, centers = 5, metric = "euclidean", method_name = "Euclidean")
+
+```
+
+```{r}
+set.seed(1234)
+evaluation_manhattan <- evaluate_clustering(df_scaled, centers = 5, metric = "manhattan", method_name = "Manhattan")
+
+```
+
+```{r}
+set.seed(1234)
+evaluation_minkowski <- evaluate_clustering(df_scaled, centers = 5, metric = "minkowski", method_name = "Minkowski")
+
+```
+
+```{r}
+evaluation_results <- data.frame(
+  Metric = c("Mean Silhouette Score"),
+  Euclidean = c(evaluation_euclidean$silhouette),
+  Manhattan = c(evaluation_manhattan$silhouette)
+)
+
+print(evaluation_results)
+
+```
+
+# K-medoids Clustering#
+```{r}
+# Optimal Number of cluster#
+# Compute total within-cluster sum of squares (WSS) for k from 1 to 10
+wss <- function(k) {
+  pam(df_scaled, k)$tot.withinss
+}
+
+k.values <- 1:10
+wss_values <- sapply(k.values, wss)
+
+# Plot the WSS for each k
+plot(k.values, wss_values, type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+
+```
+
+```{r}
+# 2 clusters#
+pam_result_2 <- pam(df_scaled, 2)
+pam_result_2
+plot(pam_result_2)
+
+# 3 clusters#
+pam_result_3 <- pam(df_scaled, 3)
+plot(pam_result_3)
+
+
+# 4 clusters#
+pam_result_4 <- pam(df_scaled, 4)
+plot(pam_result_4)
+
+# 5 clusters#
+pam_result_5 <- pam(df_scaled, 5)
+plot(pam_result_5)
+```
+
+# HAC#
+
+```{r}
+distance_df <- as.matrix(dist(df_scaled))
+distance_df[1:3, 1:3]
+```
+
+
+```{r}
+#Optimal Number of clusters#
+ggplot_fviz <- fviz_nbclust(df_scaled, FUN=hcut, method="silhouette")
+ggplot_fviz
+
+# 2 clusters
+```
+
+```{r}
+
+dist_matrix <- dist(df_scaled, method = "euclidean")
+
+# complete Linkage#
+hclust_complete <- hclust(dist_matrix, method = "complete")
+plot(as.dendrogram(hclust_complete, hang=0), ylab="complete linkage",
+     xlab="Euclidean distance", horiz=TRUE)
+
+dend_clus_complete <- as.dendrogram(hclust_complete, hang=0)
+
+# 2 clusters#
+dendrogram_cut_2clusters_complete <- color_branches(dend_clus_complete, k=2)
+plot(dendrogram_cut_2clusters_complete, ylab="complete linkage",
+     xlab="Euclidean distance", horiz=TRUE, cex = 0.6, las=1)
+
+allocations_2clusters <- cutree(dend_clus_complete, k=2)
+head(allocations_2clusters)
+table(allocations_2clusters)
+# 1     2 
+# 107   331
+
+# 3 clusters #
+dendrogram_cut_3clusters_complete <- color_branches(dend_clus_complete, k=3)
+plot(dendrogram_cut_3clusters_complete, ylab="complete linkage",
+     xlab="Euclidean distance", horiz=TRUE, cex = 0.6, las=1)
+
+allocations_3clusters <- cutree(dend_clus_complete, k=3)
+table(allocations_3clusters)
+# 1   2   3 
+# 56 331  51 
+
+# 4 clusters#
+dendrogram_cut_4clusters_complete <- color_branches(dend_clus_complete, k=4)
+plot(dendrogram_cut_4clusters_complete, ylab="complete linkage",
+     xlab="Euclidean distance", horiz=TRUE, cex = 0.6, las=1)
+
+allocations_4clusters <- cutree(dend_clus_complete, k=4)
+table(allocations_4clusters)
+
+```
+
+
+```{r}
+# cutting at height = 10
+
+dendrogram_cut_10.9height <- color_branches(dend_clus_complete, h=10.9)
+plot(dendrogram_cut_10.9height,  ylab="complete linkage",
+     xlab="Euclidean distance", horiz=TRUE, cex = 0.6, las=1)
+abline(v=10.9, lty=2, lwd=2)
+allocations_10.9height <- cutree(dend_clus_complete, h = 10.9)
+
+df_labels <- cutree(hclust_complete, h=11)
+pairs(df_scaled[,1:6], col=df_labels, lower.panel=NULL)
+```
+
+
+```{r}
+#silhouette plots#
+par(mfrow=c(1,4))
+plot(silhouette(allocations_2clusters, dist_matrix),
+     col=c("lightgreen", "lightblue"),
+     main="Silhouette plot (dendogram with 2 clusters)")
+plot(silhouette(allocations_3clusters, dist_matrix),
+     col=c("pink", "lightgrey", "yellow"),
+     main="Silhouette plot (dendogram with 3 clusters)")
+plot(silhouette(allocations_4clusters, dist_matrix),
+     col=c("black", "red", "green", "blue"),
+     main="Silhouette plot (dendogram with 4 clusters)")
+plot(silhouette(allocations_10.9height, dist_matrix),
+     col=c("brown", "skyblue", "limegreen", "yellow", "black"),
+     main="Silhouette plot (dendogram with 5 clusters)")
+```
+
+
+```{r}
+# Single Linkage#
+hclust_single <- hclust(dist_matrix, method = "single")
+
+#Average Linkage#
+hclust_average <- hclust(dist_matrix, method = "average")
+
+#Ward Linkage
+hclust_ward <- hclust(dist_matrix, method = "ward.D2")
+```
+
+
+```{r}
+# Delete Albumin
+```
+
